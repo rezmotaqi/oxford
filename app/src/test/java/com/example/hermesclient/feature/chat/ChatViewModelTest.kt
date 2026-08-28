@@ -92,6 +92,34 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun `terminal activity retains command and authoritative output`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            chatRepository.events = flowOf(
+                ChatEvent.ToolStarted("tool-1", "terminal", "\$ printf hello"),
+                ChatEvent.ToolCompleted("tool-1", "terminal", null, succeeded = true),
+                ChatEvent.Completed(
+                    listOf(
+                        message("tool-result-1", MessageRole.TOOL, "hello", toolName = "terminal"),
+                        message("assistant-1", MessageRole.ASSISTANT, "Done"),
+                    ),
+                ),
+            )
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.updateInput("Run it")
+            viewModel.sendMessage()
+            advanceUntilIdle()
+
+            val terminal = viewModel.uiState.value.items
+                .filterIsInstance<ChatItem.ToolActivity>()
+                .single()
+            assertEquals("\$ printf hello", terminal.command)
+            assertEquals("hello", terminal.output)
+            assertEquals(ToolState.Completed(succeeded = true), terminal.state)
+        }
+
+    @Test
     fun `send is ignored while a turn is already streaming`() =
         runTest(mainDispatcherRule.dispatcher) {
             val finishStream = CompletableDeferred<Unit>()
@@ -176,17 +204,51 @@ class ChatViewModelTest {
             assertEquals(listOf("run-1"), chatRepository.stopCalls)
         }
 
+    @Test
+    fun `steering a running run sends trimmed guidance and keeps the stream active`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val finishStream = CompletableDeferred<Unit>()
+            chatRepository.events = kotlinx.coroutines.flow.flow {
+                emit(ChatEvent.RunStarted("run-1"))
+                finishStream.await()
+                emit(ChatEvent.Completed(emptyList()))
+            }
+            val viewModel = createViewModel()
+            advanceUntilIdle()
+
+            viewModel.updateInput("Investigate the issue")
+            viewModel.sendMessage()
+            runCurrent()
+            viewModel.updateSteeringInput("  Prioritize the failing test.  ")
+            viewModel.sendSteer()
+            advanceUntilIdle()
+
+            val state = viewModel.uiState.value
+            assertEquals(listOf("run-1" to "Prioritize the failing test."), chatRepository.steerCalls)
+            assertEquals("", state.steeringInput)
+            assertEquals(StreamingState.Streaming, state.streamingState)
+
+            finishStream.complete(Unit)
+            advanceUntilIdle()
+        }
+
     private fun createViewModel() = ChatViewModel(
         savedStateHandle = SavedStateHandle(mapOf(ChatViewModel.SESSION_ID_KEY to SESSION_ID)),
         sessionRepository = sessionRepository,
         chatRepository = chatRepository,
     )
 
-    private fun message(id: String, role: MessageRole, content: String) = ChatMessage(
+    private fun message(
+        id: String,
+        role: MessageRole,
+        content: String,
+        toolName: String? = null,
+    ) = ChatMessage(
         id = id,
         role = role,
         content = content,
         createdAt = Instant.EPOCH,
+        toolName = toolName,
     )
 
     private class FakeSessionRepository : SessionRepository {
@@ -208,6 +270,7 @@ class ChatViewModelTest {
         val stopRequested = CompletableDeferred<Unit>()
         val approvalCalls = mutableListOf<Pair<String, ApprovalChoice>>()
         val stopCalls = mutableListOf<String>()
+        val steerCalls = mutableListOf<Pair<String, String>>()
 
         override fun streamMessage(
             sessionId: String,
@@ -221,6 +284,11 @@ class ChatViewModelTest {
         override suspend fun respondToApproval(runId: String, choice: ApprovalChoice): Result<Unit> {
             approvalCalls += runId to choice
             approvalResponse.complete(Unit)
+            return Result.success(Unit)
+        }
+
+        override suspend fun steerRun(runId: String, input: String): Result<Unit> {
+            steerCalls += runId to input
             return Result.success(Unit)
         }
 

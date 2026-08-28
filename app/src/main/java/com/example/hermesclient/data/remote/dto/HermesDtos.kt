@@ -102,6 +102,17 @@ data class ApprovalResponseDto(
 )
 
 @Serializable
+data class SteerRunRequestDto(
+    val input: String,
+)
+
+@Serializable
+data class SteerRunDto(
+    @SerialName("run_id") val runId: String,
+    val accepted: Boolean,
+)
+
+@Serializable
 data class StopRunDto(
     @SerialName("run_id") val runId: String,
     val status: String,

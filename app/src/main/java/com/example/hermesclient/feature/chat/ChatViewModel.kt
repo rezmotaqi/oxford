@@ -60,6 +60,10 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(input = value) }
     }
 
+    fun updateSteeringInput(value: String) {
+        _uiState.update { it.copy(steeringInput = value) }
+    }
+
     fun sendMessage() {
         val snapshot = _uiState.value
         val text = snapshot.input.trim()
@@ -80,6 +84,7 @@ class ChatViewModel @Inject constructor(
             it.copy(
                 items = it.items + userItem,
                 input = "",
+                steeringInput = "",
                 streamingState = StreamingState.Streaming,
                 activeRunId = null,
                 actionError = null,
@@ -150,6 +155,18 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun sendSteer() {
+        val runId = _uiState.value.activeRunId ?: return
+        val input = _uiState.value.steeringInput.trim()
+        if (_uiState.value.streamingState != StreamingState.Streaming || input.isEmpty()) return
+        _uiState.update { it.copy(steeringInput = "", actionError = null) }
+        viewModelScope.launch {
+            chatRepository.steerRun(runId, input).onFailure { error ->
+                _uiState.update { it.copy(actionError = error.toUserMessage()) }
+            }
+        }
+    }
+
     fun respondToApproval(key: String, choice: ApprovalChoice) {
         val approval = _uiState.value.items.firstOrNull { it.key == key } as? ChatItem.Approval
             ?: return
@@ -196,6 +213,7 @@ class ChatViewModel @Inject constructor(
             it.copy(
                 loadState = ChatLoadState.Loading,
                 streamingState = StreamingState.Idle,
+                steeringInput = "",
                 activeRunId = null,
                 actionError = null,
             )
@@ -273,6 +291,7 @@ class ChatViewModel @Inject constructor(
                 toolName = event.name,
                 state = ToolState.InProgress,
                 preview = event.preview,
+                command = event.preview.takeIf { event.name == TERMINAL_TOOL },
             )
             if (existingIndex >= 0) {
                 state.copy(items = state.items.replaceAt(existingIndex) { activity })
@@ -313,6 +332,7 @@ class ChatViewModel @Inject constructor(
                     toolName = event.name,
                     state = completed,
                     preview = event.preview,
+                    command = event.preview.takeIf { event.name == TERMINAL_TOOL },
                 )
                 if (existingIndex >= 0) {
                     state.copy(items = state.items.replaceAt(existingIndex) { activity })
@@ -368,6 +388,7 @@ class ChatViewModel @Inject constructor(
                     }
                 },
                 streamingState = StreamingState.Idle,
+                steeringInput = "",
                 activeRunId = null,
                 actionError = null,
             )
@@ -403,18 +424,17 @@ class ChatViewModel @Inject constructor(
             val streamedItems = state.items.drop(userIndex + 1).map { item ->
                 if (item is ChatItem.Message) item.copy(isStreaming = false) else item
             }
-            val retainedActivities = streamedItems.filter { item ->
-                item is ChatItem.Approval ||
-                    (item is ChatItem.ToolActivity && turnTranscript.none { it.role == MessageRole.TOOL })
-            }
+            val reconciledItems = authoritativeItems.mergeToolDetailsFrom(streamedItems)
+            val retainedActivities = streamedItems.filterIsInstance<ChatItem.Approval>()
 
             state.copy(
                 items = prefix + if (authoritativeItems.isEmpty()) {
                     streamedItems
                 } else {
-                    retainedActivities + authoritativeItems
+                    retainedActivities + reconciledItems
                 },
                 streamingState = StreamingState.Idle,
+                steeringInput = "",
                 activeRunId = null,
                 actionError = null,
             )
@@ -433,6 +453,7 @@ class ChatViewModel @Inject constructor(
                     }
                 },
                 streamingState = StreamingState.Failed(message),
+                steeringInput = "",
                 activeRunId = null,
             )
         }
@@ -452,6 +473,8 @@ class ChatViewModel @Inject constructor(
                 toolName = message.toolName ?: "Tool",
                 state = ToolState.Completed(succeeded = true),
                 preview = message.content.takeIf(String::isNotBlank),
+                output = message.content.takeIf(String::isNotBlank)
+                    .takeIf { message.toolName == TERMINAL_TOOL },
             )
             else -> ChatItem.Message(
                 key = message.id?.let { "history-message-$index-$it" } ?: "history-message-$index",
@@ -467,6 +490,8 @@ class ChatViewModel @Inject constructor(
                 toolName = message.toolName ?: "Tool",
                 state = ToolState.Completed(succeeded = true),
                 preview = message.content.takeIf(String::isNotBlank),
+                output = message.content.takeIf(String::isNotBlank)
+                    .takeIf { message.toolName == TERMINAL_TOOL },
             )
             else -> ChatItem.Message(
                 key = message.id?.let { "completed-message-$index-$it" }
@@ -483,9 +508,26 @@ class ChatViewModel @Inject constructor(
 
     companion object {
         const val SESSION_ID_KEY = "sessionId"
+        private const val TERMINAL_TOOL = "terminal"
 
         private fun localKey(prefix: String): String = "$prefix-${UUID.randomUUID()}"
         private fun toolKey(id: String): String = "tool-$id"
+    }
+}
+
+private fun List<ChatItem>.mergeToolDetailsFrom(streamedItems: List<ChatItem>): List<ChatItem> {
+    val streamedTools = streamedItems.filterIsInstance<ChatItem.ToolActivity>().toMutableList()
+    return map { authoritativeItem ->
+        if (authoritativeItem !is ChatItem.ToolActivity) return@map authoritativeItem
+        val streamedIndex = streamedTools.indexOfFirst { it.toolName == authoritativeItem.toolName }
+        if (streamedIndex < 0) return@map authoritativeItem
+
+        val streamed = streamedTools.removeAt(streamedIndex)
+        authoritativeItem.copy(
+            key = streamed.key,
+            command = streamed.command,
+            output = authoritativeItem.output ?: streamed.output,
+        )
     }
 }
 

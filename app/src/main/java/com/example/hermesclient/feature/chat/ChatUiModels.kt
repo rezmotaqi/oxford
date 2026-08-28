@@ -18,6 +18,8 @@ sealed interface ChatItem {
         val toolName: String,
         val state: ToolState,
         val preview: String? = null,
+        val command: String? = null,
+        val output: String? = null,
     ) : ChatItem
 
     data class Approval(
@@ -73,6 +75,7 @@ data class ChatUiState(
     val loadState: ChatLoadState = ChatLoadState.Loading,
     val streamingState: StreamingState = StreamingState.Idle,
     val input: String = "",
+    val steeringInput: String = "",
     val activeRunId: String? = null,
     val actionError: String? = null,
 ) {
@@ -84,4 +87,7 @@ data class ChatUiState(
 
     val canStop: Boolean
         get() = streamingState == StreamingState.Streaming && activeRunId != null
+
+    val canSteer: Boolean
+        get() = canStop && steeringInput.isNotBlank()
 }

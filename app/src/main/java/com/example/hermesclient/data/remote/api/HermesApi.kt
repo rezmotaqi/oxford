@@ -9,6 +9,8 @@ import com.example.hermesclient.data.remote.dto.ApprovalResponseRequestDto
 import com.example.hermesclient.data.remote.dto.RunCreatedDto
 import com.example.hermesclient.data.remote.dto.RunRequestDto
 import com.example.hermesclient.data.remote.dto.StopRunDto
+import com.example.hermesclient.data.remote.dto.SteerRunDto
+import com.example.hermesclient.data.remote.dto.SteerRunRequestDto
 import com.example.hermesclient.data.remote.dto.SessionEnvelopeDto
 import com.example.hermesclient.data.remote.dto.SessionListDto
 import retrofit2.http.Body
@@ -58,6 +60,12 @@ interface HermesApi {
         @Url url: String,
         @Body request: ApprovalResponseRequestDto,
     ): ApprovalResponseDto
+
+    @POST
+    suspend fun steerRun(
+        @Url url: String,
+        @Body request: SteerRunRequestDto,
+    ): SteerRunDto
 
     @POST
     suspend fun stopRun(@Url url: String): StopRunDto

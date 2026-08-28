@@ -1,5 +1,6 @@
 package com.example.hermesclient.feature.chat
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +19,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.Button
@@ -44,6 +48,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -53,6 +58,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -73,6 +79,8 @@ fun ChatRoute(
         state = state,
         onInputChange = viewModel::updateInput,
         onSend = viewModel::sendMessage,
+        onSteeringInputChange = viewModel::updateSteeringInput,
+        onSteer = viewModel::sendSteer,
         onStop = viewModel::stopRun,
         onApproval = viewModel::respondToApproval,
         onRetry = viewModel::retryLoad,
@@ -87,6 +95,8 @@ fun ChatScreen(
     state: ChatUiState,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
+    onSteeringInputChange: (String) -> Unit,
+    onSteer: () -> Unit,
     onStop: () -> Unit,
     onApproval: (String, ApprovalChoice) -> Unit,
     onRetry: () -> Unit,
@@ -110,9 +120,10 @@ fun ChatScreen(
             if (state.loadState == ChatLoadState.Ready) {
                 ChatInput(
                     value = state.input,
-                    enabled = state.streamingState !is StreamingState.Streaming &&
-                        state.streamingState !is StreamingState.Stopping,
+                    steeringValue = state.steeringInput,
+                    isStreaming = state.streamingState is StreamingState.Streaming,
                     canSend = state.canSend,
+                    canSteer = state.canSteer,
                     canStop = state.canStop,
                     isStopping = state.streamingState == StreamingState.Stopping,
                     onValueChange = onInputChange,
@@ -120,6 +131,8 @@ fun ChatScreen(
                         onSend()
                         focusManager.clearFocus()
                     },
+                    onSteeringValueChange = onSteeringInputChange,
+                    onSteer = onSteer,
                     onStop = onStop,
                 )
             }
@@ -338,6 +351,9 @@ private fun MessageItem(item: ChatItem.Message) {
 @Composable
 private fun ToolActivityItem(item: ChatItem.ToolActivity) {
     val completed = item.state as? ToolState.Completed
+    val isTerminal = item.toolName == "terminal"
+    val hasDetails = isTerminal && (item.command != null || item.output != null)
+    var expanded by rememberSaveable(item.key) { mutableStateOf(false) }
     val icon = when {
         completed == null -> Icons.Filled.HourglassTop
         completed.succeeded -> Icons.Filled.CheckCircle
@@ -355,26 +371,66 @@ private fun ToolActivityItem(item: ChatItem.ToolActivity) {
             containerColor = MaterialTheme.colorScheme.surfaceContainer,
         ),
     ) {
-        Row(
+        Column {
+            Row(
+                modifier = Modifier
+                    .then(if (hasDetails) Modifier.clickable { expanded = !expanded } else Modifier)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+                Text(
+                    text = if (isTerminal) "Terminal" else item.toolName,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = when {
+                        completed == null -> "Running"
+                        completed.succeeded -> "Done"
+                        else -> "Failed"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = tint,
+                )
+                if (hasDetails) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = if (expanded) "Hide terminal details" else "Show terminal details",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            if (expanded && hasDetails) {
+                HorizontalDivider()
+                TerminalDetails(command = item.command, output = item.output)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TerminalDetails(command: String?, output: String?) {
+    SelectionContainer {
+        Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-            Text(
-                text = item.toolName,
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = when {
-                    completed == null -> "Running"
-                    completed.succeeded -> "Done"
-                    else -> "Failed"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = tint,
-            )
+            command?.let {
+                Text("Command", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+            }
+            output?.let {
+                Text("Output", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                )
+            }
         }
     }
 }
@@ -382,12 +438,16 @@ private fun ToolActivityItem(item: ChatItem.ToolActivity) {
 @Composable
 private fun ChatInput(
     value: String,
-    enabled: Boolean,
+    steeringValue: String,
+    isStreaming: Boolean,
     canSend: Boolean,
+    canSteer: Boolean,
     canStop: Boolean,
     isStopping: Boolean,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
+    onSteeringValueChange: (String) -> Unit,
+    onSteer: () -> Unit,
     onStop: () -> Unit,
 ) {
     Column(
@@ -405,22 +465,30 @@ private fun ChatInput(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                enabled = enabled,
+                value = if (isStreaming) steeringValue else value,
+                onValueChange = if (isStreaming) onSteeringValueChange else onValueChange,
+                enabled = !isStopping,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text("Ask Hermes...") },
+                placeholder = { Text(if (isStreaming) "Guide Hermes while it runs..." else "Ask Hermes...") },
                 maxLines = 5,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                keyboardActions = KeyboardActions(
+                    onSend = { if (isStreaming && canSteer) onSteer() else if (canSend) onSend() },
+                ),
             )
+            IconButton(
+                onClick = if (isStreaming) onSteer else onSend,
+                enabled = if (isStreaming) canSteer else canSend,
+                modifier = Modifier.size(52.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = if (isStreaming) "Send guidance" else "Send",
+                )
+            }
             if (canStop || isStopping) {
                 IconButton(onClick = onStop, enabled = canStop, modifier = Modifier.size(52.dp)) {
                     Icon(Icons.Filled.StopCircle, contentDescription = "Stop")
-                }
-            } else {
-                IconButton(onClick = onSend, enabled = canSend, modifier = Modifier.size(52.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                 }
             }
         }

@@ -174,6 +174,35 @@ class HermesSseNetworkTest {
     }
 
     @Test
+    fun `steer action posts guidance to the active run`() = runBlocking {
+        server.enqueue(
+            MockResponse.Builder()
+                .setHeader("Content-Type", "application/json")
+                .body("""{"run_id":"run-1","accepted":true}""")
+                .build(),
+        )
+        val runtime = ConnectionRuntime().apply {
+            update(HermesConnectionConfig(server.url("/").toString(), "test-key"))
+        }
+        val json = Json { ignoreUnknownKeys = true }
+        val repository = HermesChatRepository(
+            api = HermesApiFactory(json, HermesHttpClientFactory()).create(ApiKeyProvider { "test-key" }),
+            sseDataSource = OkHttpHermesSseDataSource(authenticatedClient()),
+            eventParser = DefaultHermesEventParser(json),
+            connectionRuntime = runtime,
+            endpointResolver = EndpointResolver(),
+            errorMapper = HermesErrorMapper(),
+        )
+
+        assertTrue(repository.steerRun("run-1", "Prioritize the failing test.").isSuccess)
+
+        val steer = server.takeRequest()
+        assertEquals("/v1/runs/run-1/steer", steer.url.encodedPath)
+        assertEquals("POST", steer.method)
+        assertEquals("{\"input\":\"Prioritize the failing test.\"}", requireNotNull(steer.body).utf8())
+    }
+
+    @Test
     fun `abrupt disconnect fails the active stream`() = runBlocking {
         val partialBody = "event: assistant.delta\ndata: {\"delta\":\"Hi\"}\n\n"
         server.enqueue(

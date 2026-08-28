@@ -40,5 +40,7 @@ interface ChatRepository {
 
     suspend fun respondToApproval(runId: String, choice: ApprovalChoice): Result<Unit>
 
+    suspend fun steerRun(runId: String, input: String): Result<Unit>
+
     suspend fun stopRun(runId: String): Result<Unit>
 }

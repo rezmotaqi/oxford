@@ -7,6 +7,7 @@ import com.example.hermesclient.data.remote.api.HermesApi
 import com.example.hermesclient.data.remote.dto.ApprovalResponseRequestDto
 import com.example.hermesclient.data.remote.dto.RunRequestDto
 import com.example.hermesclient.data.remote.dto.RunMessageDto
+import com.example.hermesclient.data.remote.dto.SteerRunRequestDto
 import com.example.hermesclient.data.remote.sse.HermesEventParser
 import com.example.hermesclient.data.remote.sse.HermesSseDataSource
 import com.example.hermesclient.domain.model.ApprovalChoice
@@ -99,6 +100,14 @@ class HermesChatRepository @Inject constructor(
                 ApprovalResponseRequestDto(choice.wireValue),
             )
         }
+
+    override suspend fun steerRun(runId: String, input: String): Result<Unit> = request {
+        val config = connectionRuntime.config() ?: throw HermesError.MissingApiKey
+        api.steerRun(
+            endpointResolver.resolveSegments(config.baseUrl, "v1", "runs", runId, "steer"),
+            SteerRunRequestDto(input),
+        )
+    }
 
     override suspend fun stopRun(runId: String): Result<Unit> = request {
         val config = connectionRuntime.config() ?: throw HermesError.MissingApiKey
